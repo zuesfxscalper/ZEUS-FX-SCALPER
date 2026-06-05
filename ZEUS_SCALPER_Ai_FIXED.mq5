@@ -5,18 +5,19 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2026, CYCLONE POSH"
 #property link      "https://www.mql5.com"
-#property version   "1.06"
-#property description "ZEUS SCALPER Ai - Advanced Scalping EA with ATR, RSI, MACD, CCI Algorithms"
+#property version   "1.07"
+#property description "ZEUS SCALPER Ai - Advanced Scalping EA with ATR, RSI, MACD, CCI Algorithms (FIXED)"
+#property strict
 //+------------------------------------------------------------------+
 //| Include                                                          |
 //+------------------------------------------------------------------+
-#include <Expert\Expert.mqh>
 #include <Trade\Trade.mqh>
+
 //+------------------------------------------------------------------+
 //| Custom Trade Comment Settings                                    |
 //+------------------------------------------------------------------+
 #define TRADE_COMMENT "ZEUS SCALPER Ai"
-#define VERSION_NUMBER "1.06"
+#define VERSION_NUMBER "1.07"
 #define EA_NAME "ZEUS SCALPER Ai"
 
 enum TradeType { BUY_TRADE = 1, SELL_TRADE = -1, NO_TRADE = 0 };
@@ -25,8 +26,8 @@ enum TradeType { BUY_TRADE = 1, SELL_TRADE = -1, NO_TRADE = 0 };
 //| Inputs - Core Settings                                           |
 //+------------------------------------------------------------------+
 input string             Expert_Title                 = EA_NAME;
-ulong                    Expert_MagicNumber           = 53927483;
-bool                     Expert_EveryTick             = false;
+input ulong              Expert_MagicNumber           = 53927483;
+input bool               Expert_EveryTick             = false;
 
 //--- Dashboard
 input bool               ShowDashboard                = true;
@@ -68,8 +69,8 @@ input double             Signal_1_MA_Weight           = 0.12;
 //+------------------------------------------------------------------+
 input int                RSI_Period                   = 14;
 input double             RSI_Weight                   = 0.20;
-input double             RSI_BuyLevel                 = 40;      // Buy when RSI > 40 (not oversold)
-input double             RSI_SellLevel                = 60;      // Sell when RSI < 60 (not overbought)
+input double             RSI_BuyLevel                 = 40;
+input double             RSI_SellLevel                = 60;
 
 //+------------------------------------------------------------------+
 //| Advanced Algorithm 2: MACD (Moving Average Convergence Divergence)|
@@ -84,8 +85,8 @@ input double             MACD_Weight                  = 0.20;
 //+------------------------------------------------------------------+
 input int                CCI_Period                   = 20;
 input double             CCI_Weight                   = 0.16;
-input double             CCI_BuyLevel                 = 0;       // Buy when CCI > 0
-input double             CCI_SellLevel                = 0;       // Sell when CCI < 0
+input double             CCI_BuyLevel                 = 0;
+input double             CCI_SellLevel                = 0;
 
 //+------------------------------------------------------------------+
 //| Advanced Algorithm 4: Stochastic                                 |
@@ -128,8 +129,6 @@ int rsi_handle = INVALID_HANDLE;
 int macd_handle = INVALID_HANDLE;
 int cci_handle = INVALID_HANDLE;
 int stoch_handle = INVALID_HANDLE;
-int ma200_handle = INVALID_HANDLE;
-int ma50_handle = INVALID_HANDLE;
 
 //+------------------------------------------------------------------+
 //| Get Trade Comment                                                |
@@ -141,6 +140,17 @@ string GetTradeComment() {
    comment += " MACD:" + IntegerToString(MACD_FastEMA) + "/" + IntegerToString(MACD_SlowEMA);
    comment += " CCI:" + IntegerToString(CCI_Period);
    return comment;
+}
+
+//+------------------------------------------------------------------+
+//| Get Current Close Price                                          |
+//+------------------------------------------------------------------+
+double GetCurrentClose() {
+   double close_buffer[1];
+   if(CopyClose(Symbol(), Period(), 0, 1, close_buffer) > 0) {
+      return close_buffer[0];
+   }
+   return 0.0;
 }
 
 //+------------------------------------------------------------------+
@@ -187,13 +197,11 @@ int GetRSISignalStrength() {
    double rsi_value = rsi_buffer[0];
    int strength = 0;
    
-   // BUY: RSI between 40-60 (momentum building)
    if(rsi_value > RSI_BuyLevel && rsi_value < 70) {
       strength = (int)((rsi_value - RSI_BuyLevel) / (70 - RSI_BuyLevel) * 100);
       if(strength > 100) strength = 100;
    }
    
-   // SELL: RSI between 40-60 (momentum building down)
    if(rsi_value < RSI_SellLevel && rsi_value > 30) {
       strength = (int)((RSI_SellLevel - rsi_value) / (RSI_SellLevel - 30) * 100);
       if(strength > 100) strength = 100;
@@ -221,12 +229,9 @@ int GetMACDSignalStrength() {
    double histogram = macd_main[0] - macd_signal[0];
    int strength = 0;
    
-   // Bullish: MACD above Signal Line
    if(histogram > 0) {
       strength = (int)(MathMin(MathAbs(histogram) * 10000, 100));
-   }
-   // Bearish: MACD below Signal Line
-   else {
+   } else {
       strength = (int)(MathMin(MathAbs(histogram) * 10000, 100));
    }
    
@@ -240,7 +245,7 @@ int GetCCISignalStrength() {
    double cci_buffer[1];
    
    if(cci_handle == INVALID_HANDLE) {
-      cci_handle = iCCI(Symbol(), Period(), CCI_Period);
+      cci_handle = iCCI(Symbol(), Period(), CCI_Period, PRICE_CLOSE);
    }
    
    if(cci_handle == INVALID_HANDLE || CopyBuffer(cci_handle, 0, 0, 1, cci_buffer) <= 0) {
@@ -250,12 +255,9 @@ int GetCCISignalStrength() {
    double cci_value = cci_buffer[0];
    int strength = 0;
    
-   // Bullish: CCI above 0
    if(cci_value > 0) {
       strength = (int)(MathMin(cci_value / 100, 100));
-   }
-   // Bearish: CCI below 0
-   else {
+   } else {
       strength = (int)(MathMin(MathAbs(cci_value) / 100, 100));
    }
    
@@ -270,7 +272,7 @@ int GetStochasticSignalStrength() {
    double stoch_k[1], stoch_d[1];
    
    if(stoch_handle == INVALID_HANDLE) {
-      stoch_handle = iStochastic(Symbol(), Period(), Signal_Stoch_PeriodK, Signal_Stoch_PeriodD, Signal_Stoch_PeriodSlow, PRICE_CLOSE);
+      stoch_handle = iStochastic(Symbol(), Period(), Signal_Stoch_PeriodK, Signal_Stoch_PeriodD, Signal_Stoch_PeriodSlow, MODE_SMA, Signal_Stoch_Applied);
    }
    
    if(stoch_handle == INVALID_HANDLE || 
@@ -281,13 +283,10 @@ int GetStochasticSignalStrength() {
    
    int strength = 0;
    
-   // Bullish: K > D and not overbought
    if(stoch_k[0] > stoch_d[0] && stoch_k[0] < 80) {
       strength = (int)((stoch_k[0] - stoch_d[0]) * 5);
       if(strength > 100) strength = 100;
-   }
-   // Bearish: K < D and not oversold
-   else if(stoch_k[0] < stoch_d[0] && stoch_k[0] > 20) {
+   } else if(stoch_k[0] < stoch_d[0] && stoch_k[0] > 20) {
       strength = (int)((stoch_d[0] - stoch_k[0]) * 5);
       if(strength > 100) strength = 100;
    }
@@ -296,21 +295,35 @@ int GetStochasticSignalStrength() {
 }
 
 //+------------------------------------------------------------------+
+//| Get MA Value Helper                                              |
+//+------------------------------------------------------------------+
+double GetMAValue(int period, ENUM_MA_METHOD method) {
+   int handle = iMA(Symbol(), Period(), period, 0, method, PRICE_CLOSE);
+   if(handle == INVALID_HANDLE) return 0.0;
+   
+   double ma_buffer[1];
+   if(CopyBuffer(handle, 0, 0, 1, ma_buffer) > 0) {
+      IndicatorRelease(handle);
+      return ma_buffer[0];
+   }
+   
+   IndicatorRelease(handle);
+   return 0.0;
+}
+
+//+------------------------------------------------------------------+
 //| MA Filter Check (Trend Confirmation)                             |
 //+------------------------------------------------------------------+
 int GetMAFilterStrength() {
-   double ma200 = iMA(Symbol(), Period(), Signal_0_MA_PeriodMA, 0, MODE_EMA, PRICE_CLOSE, 0);
-   double ma50 = iMA(Symbol(), Period(), Signal_1_MA_PeriodMA, 0, MODE_EMA, PRICE_CLOSE, 0);
-   double current_price = Close[0];
+   double ma200 = GetMAValue(Signal_0_MA_PeriodMA, Signal_0_MA_Method);
+   double ma50 = GetMAValue(Signal_1_MA_PeriodMA, Signal_1_MA_Method);
+   double current_price = GetCurrentClose();
    
    int strength = 0;
    
-   // Bullish: Price above both MAs
    if(current_price > ma50 && ma50 > ma200) {
       strength = 100;
-   }
-   // Bearish: Price below both MAs
-   else if(current_price < ma50 && ma50 < ma200) {
+   } else if(current_price < ma50 && ma50 < ma200) {
       strength = 100;
    }
    
@@ -318,24 +331,22 @@ int GetMAFilterStrength() {
 }
 
 //+------------------------------------------------------------------+
-//| Enhanced: Get BUY Signal Strength (All Algorithms Combined)       |
+//| Get BUY Signal Strength (All Algorithms Combined)                |
 //+------------------------------------------------------------------+
 int GetBuySignalStrength() {
-   double ma200 = iMA(Symbol(), Period(), Signal_0_MA_PeriodMA, 0, MODE_EMA, PRICE_CLOSE, 0);
-   double ma50 = iMA(Symbol(), Period(), Signal_1_MA_PeriodMA, 0, MODE_EMA, PRICE_CLOSE, 0);
+   double ma200 = GetMAValue(Signal_0_MA_PeriodMA, Signal_0_MA_Method);
+   double ma50 = GetMAValue(Signal_1_MA_PeriodMA, Signal_1_MA_Method);
+   double current_price = GetCurrentClose();
    
-   // Check trend first (must be bullish)
-   if(Close[0] < ma50 || ma50 < ma200) {
-      return 0;  // Not in bullish trend
+   if(current_price < ma50 || ma50 < ma200) {
+      return 0;
    }
    
-   // Get signals from all algorithms
    int rsi_signal = GetRSISignalStrength();
    int macd_signal = GetMACDSignalStrength();
    int cci_signal = GetCCISignalStrength();
    int stoch_signal = GetStochasticSignalStrength();
    
-   // Weighted combination
    double weighted_strength = 
       (rsi_signal * RSI_Weight) +
       (macd_signal * MACD_Weight) +
@@ -343,7 +354,6 @@ int GetBuySignalStrength() {
       (stoch_signal * Signal_Stoch_Weight) +
       (GetMAFilterStrength() * (Signal_0_MA_Weight + Signal_1_MA_Weight));
    
-   // Normalize to 0-100
    int final_strength = (int)MathMin(weighted_strength, 100);
    
    if(EnableDebugLogging && rsi_signal > 0) {
@@ -355,18 +365,17 @@ int GetBuySignalStrength() {
 }
 
 //+------------------------------------------------------------------+
-//| Enhanced: Get SELL Signal Strength (All Algorithms Combined)      |
+//| Get SELL Signal Strength (All Algorithms Combined)               |
 //+------------------------------------------------------------------+
 int GetSellSignalStrength() {
-   double ma200 = iMA(Symbol(), Period(), Signal_0_MA_PeriodMA, 0, MODE_EMA, PRICE_CLOSE, 0);
-   double ma50 = iMA(Symbol(), Period(), Signal_1_MA_PeriodMA, 0, MODE_EMA, PRICE_CLOSE, 0);
+   double ma200 = GetMAValue(Signal_0_MA_PeriodMA, Signal_0_MA_Method);
+   double ma50 = GetMAValue(Signal_1_MA_PeriodMA, Signal_1_MA_Method);
+   double current_price = GetCurrentClose();
    
-   // Check trend first (must be bearish)
-   if(Close[0] > ma50 || ma50 > ma200) {
-      return 0;  // Not in bearish trend
+   if(current_price > ma50 || ma50 > ma200) {
+      return 0;
    }
    
-   // Get signals from all algorithms (inverted for sell)
    double rsi_buffer[1];
    if(rsi_handle == INVALID_HANDLE) {
       rsi_handle = iRSI(Symbol(), Period(), RSI_Period, PRICE_CLOSE);
@@ -387,7 +396,7 @@ int GetSellSignalStrength() {
    
    double cci_buffer[1];
    if(cci_handle == INVALID_HANDLE) {
-      cci_handle = iCCI(Symbol(), Period(), CCI_Period);
+      cci_handle = iCCI(Symbol(), Period(), CCI_Period, PRICE_CLOSE);
    }
    CopyBuffer(cci_handle, 0, 0, 1, cci_buffer);
    double cci_value = cci_buffer[0];
@@ -395,14 +404,13 @@ int GetSellSignalStrength() {
    
    double stoch_k[1], stoch_d[1];
    if(stoch_handle == INVALID_HANDLE) {
-      stoch_handle = iStochastic(Symbol(), Period(), Signal_Stoch_PeriodK, Signal_Stoch_PeriodD, Signal_Stoch_PeriodSlow, PRICE_CLOSE);
+      stoch_handle = iStochastic(Symbol(), Period(), Signal_Stoch_PeriodK, Signal_Stoch_PeriodD, Signal_Stoch_PeriodSlow, MODE_SMA, Signal_Stoch_Applied);
    }
    CopyBuffer(stoch_handle, 0, 0, 1, stoch_k);
    CopyBuffer(stoch_handle, 1, 0, 1, stoch_d);
    int stoch_signal_val = (stoch_k[0] < stoch_d[0] && stoch_k[0] > 20) ? 
                           (int)((stoch_d[0] - stoch_k[0]) * 5) : 0;
    
-   // Weighted combination
    double weighted_strength = 
       (rsi_signal * RSI_Weight) +
       (macd_signal_val * MACD_Weight) +
@@ -433,7 +441,6 @@ TradeType CheckTradeSignal() {
    
    lastSignalStrength = (buy_strength > sell_strength) ? buy_strength : sell_strength;
    
-   // BUY Signal
    if(buy_strength >= Signal_ThresholdOpen && buy_strength > sell_strength) {
       lastSignalType = BUY_TRADE;
       if(EnableDebugLogging) {
@@ -443,7 +450,6 @@ TradeType CheckTradeSignal() {
       return BUY_TRADE;
    }
    
-   // SELL Signal
    if(sell_strength >= Signal_ThresholdOpen && sell_strength > buy_strength) {
       lastSignalType = SELL_TRADE;
       if(EnableDebugLogging) {
@@ -624,16 +630,14 @@ void DrawDashboard() {
 //| OnInit                                                           |
 //+------------------------------------------------------------------+
 int OnInit() {
-   // Initialize Trade executor
    TradeExecutor.SetExpertMagicNumber(Expert_MagicNumber);
    TradeExecutor.LogLevel(LOG_LEVEL_ERRORS);
    
-   // Initialize indicators
    atr_handle = iATR(Symbol(), Period(), ATR_Period);
    rsi_handle = iRSI(Symbol(), Period(), RSI_Period, PRICE_CLOSE);
    macd_handle = iMACD(Symbol(), Period(), MACD_FastEMA, MACD_SlowEMA, MACD_Signal, PRICE_CLOSE);
-   cci_handle = iCCI(Symbol(), Period(), CCI_Period);
-   stoch_handle = iStochastic(Symbol(), Period(), Signal_Stoch_PeriodK, Signal_Stoch_PeriodD, Signal_Stoch_PeriodSlow, PRICE_CLOSE);
+   cci_handle = iCCI(Symbol(), Period(), CCI_Period, PRICE_CLOSE);
+   stoch_handle = iStochastic(Symbol(), Period(), Signal_Stoch_PeriodK, Signal_Stoch_PeriodD, Signal_Stoch_PeriodSlow, MODE_SMA, Signal_Stoch_Applied);
    
    if(atr_handle == INVALID_HANDLE || rsi_handle == INVALID_HANDLE || macd_handle == INVALID_HANDLE || 
       cci_handle == INVALID_HANDLE || stoch_handle == INVALID_HANDLE) {
