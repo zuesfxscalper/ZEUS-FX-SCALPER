@@ -5,8 +5,8 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2026, CYCLONE POSH"
 #property link      "https://www.mql5.com"
-#property version   "1.04"
-#property description "ZEUS SCALPER Ai - Advanced Scalping EA with Multi-Indicator Analysis (FIXED)"
+#property version   "1.05"
+#property description "ZEUS SCALPER Ai - Advanced Scalping EA with ATR-based SL/TP"
 //+------------------------------------------------------------------+
 //| Include                                                          |
 //+------------------------------------------------------------------+
@@ -26,7 +26,7 @@
 //| Custom Trade Comment Settings                                    |
 //+------------------------------------------------------------------+
 #define TRADE_COMMENT "ZEUS SCALPER Ai"  // Custom trade comment
-#define VERSION_NUMBER "1.04"
+#define VERSION_NUMBER "1.05"
 #define EA_NAME "ZEUS SCALPER Ai"
 
 // Trade type enum
@@ -48,11 +48,14 @@ input int                DashboardY                   = 20;               // Das
 input int                DashboardFontSize            = 10;               // Dashboard font size
 
 //--- inputs for main signal - FIXED THRESHOLDS
-input int                Signal_ThresholdOpen         = 18;               // Signal threshold value to open [0...100] - REDUCED from 40
-input int                Signal_ThresholdClose        = 12;               // Signal threshold value to close [0...100] - REDUCED from 25
+input int                Signal_ThresholdOpen         = 18;               // Signal threshold value to open [0...100]
+input int                Signal_ThresholdClose        = 12;               // Signal threshold value to close [0...100]
 input double             Signal_PriceLevel            = 0.0;              // Price level to execute a deal
-input double             Signal_StopLevel             = 80.0;             // Stop Loss level (in points) - REDUCED from 2550
-input double             Signal_TakeLevel             = 150.0;            // Take Profit level (in points) - REDUCED from 3550
+
+//--- ATR Settings (NEW)
+input int                ATR_Period                   = 14;               // ATR Period
+input double             ATR_SL_Multiplier            = 1.5;              // ATR multiplier for Stop Loss
+input double             ATR_TP_Multiplier            = 2.0;              // ATR multiplier for Take Profit
 input int                Signal_Expiration            = 4;                // Expiration of pending orders (in bars)
 
 //--- MA Filter 1 (Trend Direction - 200 EMA)
@@ -60,14 +63,14 @@ input int                Signal_0_MA_PeriodMA         = 200;              // Mov
 input int                Signal_0_MA_Shift            = 0;                // Moving Average(200,0,...) Time shift
 input ENUM_MA_METHOD     Signal_0_MA_Method           = MODE_EMA;         // Moving Average(200,0,...) Method of averaging
 input ENUM_APPLIED_PRICE Signal_0_MA_Applied         = PRICE_CLOSE;      // Moving Average(200,0,...) Prices series
-input double             Signal_0_MA_Weight           = 0.15;             // Moving Average(200,0,...) Weight [0...1.0] - REDUCED from 0.28
+input double             Signal_0_MA_Weight           = 0.15;             // Moving Average(200,0,...) Weight [0...1.0]
 
 //--- MA Filter 2 (Entry Confirmation - 50 EMA)
 input int                Signal_1_MA_PeriodMA         = 50;               // Moving Average(50,0,...) Period of averaging
 input int                Signal_1_MA_Shift            = 0;                // Moving Average(50,0,...) Time shift
 input ENUM_MA_METHOD     Signal_1_MA_Method           = MODE_EMA;         // Moving Average(50,0,...) Method of averaging
 input ENUM_APPLIED_PRICE Signal_1_MA_Applied         = PRICE_CLOSE;      // Moving Average(50,0,...) Prices series
-input double             Signal_1_MA_Weight           = 0.15;             // Moving Average(50,0,...) Weight [0...1.0] - REDUCED from 0.32
+input double             Signal_1_MA_Weight           = 0.15;             // Moving Average(50,0,...) Weight [0...1.0]
 
 //--- Bulls Power (Uptrend Momentum)
 input int                Signal_BullsPower_PeriodBulls = 13;              // Bulls Power(13) Period of calculation
@@ -111,6 +114,9 @@ int lastTradeType = 0;  // 1 = BUY, -1 = SELL
 int lastSignalStrength = 0;
 TradeType lastSignalType = NO_TRADE;
 
+// ATR Handle
+int atr_handle = INVALID_HANDLE;
+
 //+------------------------------------------------------------------+
 //| Function to get custom trade comment with details                |
 //+------------------------------------------------------------------+
@@ -119,7 +125,35 @@ string GetTradeComment() {
    comment += " | v" + VERSION_NUMBER;
    comment += " | MA:" + IntegerToString(Signal_0_MA_PeriodMA);
    comment += "/" + IntegerToString(Signal_1_MA_PeriodMA);
+   comment += " | ATR:" + IntegerToString(ATR_Period);
    return comment;
+}
+
+//+------------------------------------------------------------------+
+//| Function to calculate ATR value                                  |
+//+------------------------------------------------------------------+
+double GetATR() {
+   double atr_buffer[1];
+   
+   if(atr_handle == INVALID_HANDLE) {
+      atr_handle = iATR(Symbol(), Period(), ATR_Period);
+   }
+   
+   if(atr_handle != INVALID_HANDLE && CopyBuffer(atr_handle, 0, 0, 1, atr_buffer) > 0) {
+      return atr_buffer[0];
+   }
+   
+   return 0.0;
+}
+
+//+------------------------------------------------------------------+
+//| Function to convert ATR to points                                |
+//+------------------------------------------------------------------+
+double ATRToPoints(double atr_value) {
+   double point_value = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
+   if(point_value == 0) point_value = 0.0001;
+   
+   return atr_value / point_value;
 }
 
 //+------------------------------------------------------------------+
@@ -242,14 +276,18 @@ TradeType CheckTradeSignal() {
 }
 
 //+------------------------------------------------------------------+
-//| Enhanced: Execute BUY trade                                      |
+//| Enhanced: Execute BUY trade with ATR-based SL/TP                 |
 //+------------------------------------------------------------------+
 bool ExecuteBuyTrade() {
    if(!EnableAutoTrade) return false;
    
    double ask = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
-   double sl = ask - Signal_StopLevel * Point();
-   double tp = ask + Signal_TakeLevel * Point();
+   double atr = GetATR();
+   double atr_points = ATRToPoints(atr);
+   
+   // Calculate SL and TP based on ATR
+   double sl = ask - (atr_points * ATR_SL_Multiplier) * Point();
+   double tp = ask + (atr_points * ATR_TP_Multiplier) * Point();
    double lot = Money_FixLot_Lots;
    
    bool result = TradeExecutor.Buy(lot, Symbol(), ask, sl, tp, GetTradeComment());
@@ -258,8 +296,8 @@ bool ExecuteBuyTrade() {
       lastTradeTime = TimeCurrent();
       lastTradeType = 1;  // BUY
       if(EnableDebugLogging) {
-         printf("[%s] BUY Executed: Price=%.5f | SL=%.5f | TP=%.5f | Lot=%.2f", 
-                EA_NAME, ask, sl, tp, lot);
+         printf("[%s] BUY Executed: Price=%.5f | ATR=%.5f | SL=%.5f (%d pts) | TP=%.5f (%d pts) | Lot=%.2f", 
+                EA_NAME, ask, atr, sl, (int)atr_points * (int)ATR_SL_Multiplier, tp, (int)atr_points * (int)ATR_TP_Multiplier, lot);
       }
    } else {
       if(EnableDebugLogging) {
@@ -271,14 +309,18 @@ bool ExecuteBuyTrade() {
 }
 
 //+------------------------------------------------------------------+
-//| Enhanced: Execute SELL trade                                     |
+//| Enhanced: Execute SELL trade with ATR-based SL/TP                |
 //+------------------------------------------------------------------+
 bool ExecuteSellTrade() {
    if(!EnableAutoTrade) return false;
    
    double bid = SymbolInfoDouble(Symbol(), SYMBOL_BID);
-   double sl = bid + Signal_StopLevel * Point();
-   double tp = bid - Signal_TakeLevel * Point();
+   double atr = GetATR();
+   double atr_points = ATRToPoints(atr);
+   
+   // Calculate SL and TP based on ATR
+   double sl = bid + (atr_points * ATR_SL_Multiplier) * Point();
+   double tp = bid - (atr_points * ATR_TP_Multiplier) * Point();
    double lot = Money_FixLot_Lots;
    
    bool result = TradeExecutor.Sell(lot, Symbol(), bid, sl, tp, GetTradeComment());
@@ -287,8 +329,8 @@ bool ExecuteSellTrade() {
       lastTradeTime = TimeCurrent();
       lastTradeType = -1;  // SELL
       if(EnableDebugLogging) {
-         printf("[%s] SELL Executed: Price=%.5f | SL=%.5f | TP=%.5f | Lot=%.2f", 
-                EA_NAME, bid, sl, tp, lot);
+         printf("[%s] SELL Executed: Price=%.5f | ATR=%.5f | SL=%.5f (%d pts) | TP=%.5f (%d pts) | Lot=%.2f", 
+                EA_NAME, bid, atr, sl, (int)atr_points * (int)ATR_SL_Multiplier, tp, (int)atr_points * (int)ATR_TP_Multiplier, lot);
       }
    } else {
       if(EnableDebugLogging) {
@@ -348,6 +390,8 @@ void DrawDashboard() {
    double ask = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
    double ma200 = iMA(Symbol(), Period(), Signal_0_MA_PeriodMA, 0, MODE_EMA, PRICE_CLOSE, 0);
    double ma50 = iMA(Symbol(), Period(), Signal_1_MA_PeriodMA, 0, MODE_EMA, PRICE_CLOSE, 0);
+   double atr = GetATR();
+   double atr_points = ATRToPoints(atr);
    
    string dashboardText = "";
    dashboardText += "╔════════════════════════════════════╗\n";
@@ -357,11 +401,14 @@ void DrawDashboard() {
    dashboardText += "║ Bid: " + DoubleToString(bid, 5) + " | Ask: " + DoubleToString(ask, 5) + "\n";
    dashboardText += "║ MA(200): " + DoubleToString(ma200, 5) + " | MA(50): " + DoubleToString(ma50, 5) + "\n";
    dashboardText += "╠════════════════════════════════════╣\n";
+   dashboardText += "║ ATR SETTINGS\n";
+   dashboardText += "║ ATR Value: " + DoubleToString(atr, 5) + " (" + DoubleToString(atr_points, 0) + " pts)\n";
+   dashboardText += "║ SL Multiplier: " + DoubleToString(ATR_SL_Multiplier, 2) + "x → " + DoubleToString(atr_points * ATR_SL_Multiplier, 0) + " pts\n";
+   dashboardText += "║ TP Multiplier: " + DoubleToString(ATR_TP_Multiplier, 2) + "x → " + DoubleToString(atr_points * ATR_TP_Multiplier, 0) + " pts\n";
+   dashboardText += "╠════════════════════════════════════╣\n";
    dashboardText += "║ SIGNAL SETTINGS\n";
    dashboardText += "║ Open Threshold: " + IntegerToString(Signal_ThresholdOpen) + "%\n";
    dashboardText += "║ Close Threshold: " + IntegerToString(Signal_ThresholdClose) + "%\n";
-   dashboardText += "║ Stop Loss: " + DoubleToString(Signal_StopLevel, 0) + " pts\n";
-   dashboardText += "║ Take Profit: " + DoubleToString(Signal_TakeLevel, 0) + " pts\n";
    dashboardText += "╠════════════════════════════════════╣\n";
    dashboardText += "║ CURRENT SIGNALS\n";
    dashboardText += "║ Buy Strength: " + IntegerToString(GetBuySignalStrength()) + "%\n";
@@ -377,7 +424,6 @@ void DrawDashboard() {
    dashboardText += "║ Total P&L: " + DoubleToString(totalProfit, 2) + " " + AccountInfoString(ACCOUNT_CURRENCY) + "\n";
    dashboardText += "╠════════════════════════════════════╣\n";
    dashboardText += "║ STATUS: " + (PositionsTotal() > 0 ? "IN TRADE 🟢" : "WAITING 🔴") + "\n";
-   dashboardText += "║ Trade Comment: " + GetTradeComment() + "\n";
    dashboardText += "║ AutoTrade: " + (EnableAutoTrade ? "ON ✓" : "OFF ✗") + "\n";
    dashboardText += "╚════════════════════════════════════╝\n";
    
@@ -392,11 +438,19 @@ int OnInit() {
    TradeExecutor.SetExpertMagicNumber(Expert_MagicNumber);
    TradeExecutor.LogLevel(LOG_LEVEL_ERRORS);
    
+   // Initialize ATR indicator
+   atr_handle = iATR(Symbol(), Period(), ATR_Period);
+   if(atr_handle == INVALID_HANDLE) {
+      printf("[%s] ERROR: Failed to initialize ATR indicator", EA_NAME);
+      return(INIT_FAILED);
+   }
+   
    printf("\n╔════════════════════════════════════╗");
    printf("\n║  " + EA_NAME + " v" + VERSION_NUMBER + " - INITIALIZED");
    printf("\n║  Magic Number: %d", Expert_MagicNumber);
    printf("\n║  Trade Comment: %s", GetTradeComment());
    printf("\n║  Auto Trade: %s", EnableAutoTrade ? "ENABLED" : "DISABLED");
+   printf("\n║  ATR Period: %d | SL: %.2fx | TP: %.2fx", ATR_Period, ATR_SL_Multiplier, ATR_TP_Multiplier);
    printf("\n║  Buy/Sell Logic: ENHANCED");
    printf("\n╚════════════════════════════════════╝\n");
    
@@ -407,6 +461,11 @@ int OnInit() {
 //| Deinitialization function of the expert                          |
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason) {
+   // Release ATR indicator
+   if(atr_handle != INVALID_HANDLE) {
+      IndicatorRelease(atr_handle);
+   }
+   
    Comment("");
    printf("[%s] Deinitialized (Reason: %d)", EA_NAME, reason);
 }
